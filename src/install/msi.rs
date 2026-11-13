@@ -114,20 +114,28 @@ pub fn helper_args(script: &str) -> Vec<String> {
     ]
 }
 
-/// Starts the helper detached and hidden. Windows only.
+/// The hidden `powershell.exe` process that runs `script`. Windows only.
+#[cfg(windows)]
+fn helper_command(script: &str) -> std::process::Command {
+    use std::os::windows::process::CommandExt;
+    // A hidden console of its own. Not DETACHED_PROCESS: powershell.exe without a
+    // console exits before running the script.
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let mut cmd = std::process::Command::new("powershell.exe");
+    cmd.args(helper_args(script))
+        .creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
+/// Starts the helper hidden; it outlives the app. Windows only.
 #[cfg(windows)]
 pub fn spawn_helper(
     msi: &Path,
     exe: &Path,
     desktop_shortcut: bool,
 ) -> Result<(), crate::UpdateError> {
-    use std::os::windows::process::CommandExt;
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    const DETACHED_PROCESS: u32 = 0x0000_0008;
     let script = helper_script(std::process::id(), msi, exe, desktop_shortcut);
-    std::process::Command::new("powershell.exe")
-        .args(helper_args(&script))
-        .creation_flags(CREATE_NO_WINDOW | DETACHED_PROCESS)
+    helper_command(&script)
         .spawn()
         .map(drop)
         .map_err(|e| crate::UpdateError::Install(format!("cannot start the installer: {e}")))
@@ -273,10 +281,8 @@ mod tests {
             &target,
             desktop_shortcut,
         );
-        let status = std::process::Command::new("powershell.exe")
-            .args(helper_args(&script))
-            .status()
-            .unwrap();
+        // Started exactly as spawn_helper starts it (same creation flags).
+        let status = helper_command(&script).spawn().unwrap().wait().unwrap();
         assert!(status.success(), "{status:?}");
         let deadline = Instant::now() + Duration::from_secs(30);
         while !marker.exists() && Instant::now() < deadline {
