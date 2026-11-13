@@ -1,0 +1,59 @@
+{
+  "assets": [
+    {
+      "browser_download_url": "https://github.com/nazdravan/furnica/releases/download/v3.0.5/furnica-3.0.5-linux-x86_64.AppImage",
+      "name": "furnica-3.0.5-linux-x86_64.AppImage",
+      "size": 7526904
+    },
+    {
+      "browser_download_url": "https://github.com/nazdravan/furnica/releases/download/v3.0.5/furnica-3.0.5-linux-x86_64.deb",
+      "name": "furnica-3.0.5-linux-x86_64.deb",
+      "size": 5147012
+    },
+    {
+      "browser_download_url": "https://github.com/nazdravan/furnica/releases/download/v3.0.5/furnica-3.0.5-linux-x86_64.tar.gz",
+      "name": "furnica-3.0.5-linux-x86_64.tar.gz",
+      "size": 7138933
+    },
+    {
+      "browser_download_url": "https://github.com/nazdravan/furnica/releases/download/v3.0.5/furnica-3.0.5-macos-universal.dmg",
+      "name": "furnica-3.0.5-macos-universal.dmg",
+      "size": 10774891
+    },
+    {
+      "browser_download_url": "https://github.com/nazdravan/furnica/releases/download/v3.0.5/furnica-3.0.5-windows-x64-portable.zip",
+      "name": "furnica-3.0.5-windows-x64-portable.zip",
+      "size": 5191240
+    },
+    {
+      "browser_download_url": "https://github.com/nazdravan/furnica/releases/download/v3.0.5/furnica-3.0.5-windows-x64.msi",
+      "name": "furnica-3.0.5-windows-x64.msi",
+      "size": 4452352
+    },
+    {
+      "browser_download_url": "https://github.com/nazdravan/furnica/releases/download/v3.0.5/furnica-3.0.5-windows-x86-portable.zip",
+      "name": "furnica-3.0.5-windows-x86-portable.zip",
+      "size": 5098342
+    },
+    {
+      "browser_download_url": "https://github.com/nazdravan/furnica/releases/download/v3.0.5/furnica-3.0.5-windows-x86.msi",
+      "name": "furnica-3.0.5-windows-x86.msi",
+      "size": 4431872
+    },
+    {
+      "browser_download_url": "https://github.com/nazdravan/furnica/releases/download/v3.0.5/furnica-3.0.5-windows7-x86-portable.zip",
+      "name": "furnica-3.0.5-windows7-x86-portable.zip",
+      "size": 23306228
+    },
+    {
+      "browser_download_url": "https://github.com/nazdravan/furnica/releases/download/v3.0.5/SHA256SUMS.txt",
+      "name": "SHA256SUMS.txt",
+      "size": 907
+    }
+  ],
+  "body": "### Adăugat\n\n- În fereastra **Ajutor**: linkuri spre pagina programului, adresa de email și\n  codul sursă, cu etichetele în limba interfeței.\n\n### Schimbat\n\n- Imaginea `.dmg` pentru macOS conține doar aplicația și scurtătura\n  *Applications*; licențele sunt în aplicație, iar exemplele în meniul\n  **Exemple**.\n\n[English](https://github.com/nazdravan/furnica/blob/main/CHANGELOG.en.md) · [Русский](https://github.com/nazdravan/furnica/blob/main/CHANGELOG.ru.md)\n\n\n**Full Changelog**: https://github.com/nazdravan/furnica/compare/v3.0.4...v3.0.5",
+  "draft": false,
+  "html_url": "https://github.com/nazdravan/furnica/releases/tag/v3.0.5",
+  "prerelease": false,
+  "tag_name": "v3.0.5"
+}
