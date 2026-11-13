@@ -3,6 +3,7 @@
 use std::fmt;
 use std::path::PathBuf;
 
+pub mod platform;
 pub mod release;
 pub mod sums;
 pub mod version;
