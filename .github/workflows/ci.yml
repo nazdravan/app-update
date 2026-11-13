@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    timeout-minutes: 30
+    name: Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+          components: clippy
+      - run: cargo test --locked
+      - run: cargo clippy --locked --all-targets -- -D warnings
+
+  # Windows 7 build: the same nightly and MinGW msvcrt setup as furnica's packaging/windows7/package.sh.
+  win7:
+    timeout-minutes: 60
+    name: Windows 7 x86 build
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: System packages
+        run: pacman -Syu --noconfirm --needed gcc mingw-w64-gcc zstd rustup git curl
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust nightly with std sources
+        run: rustup toolchain install nightly-2026-10-19 --profile minimal -c rust-src
+      - name: MinGW libraries linked to msvcrt.dll
+        run: |
+          MSYS=https://repo.msys2.org/mingw/mingw32
+          MSVCRT=$PWD/.cache/msys32
+          mkdir -p "$MSVCRT"
+          for p in \
+            mingw-w64-i686-crt-git-13.0.0.r380.gb83511db8-1-any.pkg.tar.zst \
+            mingw-w64-i686-gcc-16.2.0-6-any.pkg.tar.zst \
+            mingw-w64-i686-winpthreads-git-12.0.0.r747.g1a99f8514-1-any.pkg.tar.zst; do
+            curl -sSfL -o "$MSVCRT/$p" "$MSYS/$p"
+            tar --zstd -xf "$MSVCRT/$p" -C "$MSVCRT" mingw32/lib
+          done
+      - name: Build
+        run: |
+          LIB=$PWD/.cache/msys32/mingw32/lib
+          GCC_LIB=$(echo "$LIB"/gcc/i686-w64-mingw32/*)
+          export RUSTFLAGS="-C target-feature=+crt-static -C link-arg=-B$LIB -C link-arg=-B$GCC_LIB -C link-arg=-L$LIB -C link-arg=-L$GCC_LIB"
+          cargo +nightly-2026-10-19 build --release --locked -Z build-std --target i686-win7-windows-gnu
