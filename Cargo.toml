@@ -11,9 +11,11 @@ semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+egui = { version = "0.37", default-features = false }
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Console"] }
 # Only the Windows binary carries the zip reader; other OSes need it for tests only.
 winreg = "0.55"
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
@@ -23,3 +25,5 @@ flate2 = "1"
 zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 flate2 = "1"
 tempfile = "3"
+egui_kittest = { version = "0.37", features = ["snapshot"] }
+egui = { version = "0.37", default-features = false, features = ["default_fonts"] }
