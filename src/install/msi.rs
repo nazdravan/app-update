@@ -18,9 +18,18 @@ pub fn args(msi: &Path, desktop_shortcut: bool) -> Vec<String> {
     ]
 }
 
-/// A PowerShell single-quoted string literal.
+/// A PowerShell single-quoted string literal. PowerShell treats the typographic
+/// quotes U+2018..U+201B as single quotes too, so each of them is doubled.
 fn ps_quote(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+    let mut out = String::from("'");
+    for c in s.chars() {
+        out.push(c);
+        if matches!(c, '\'' | '\u{2018}' | '\u{2019}' | '\u{201A}' | '\u{201B}') {
+            out.push(c);
+        }
+    }
+    out.push('\'');
+    out
 }
 
 /// PowerShell script: wait for `pid` to exit, run the installer, then start `exe`
@@ -85,6 +94,8 @@ pub fn spawn_helper(
 /// `true` if the MSI recorded that the desktop shortcut was installed.
 #[cfg(windows)]
 pub fn read_desktop_shortcut(registry_key: &str) -> bool {
+    // The MSI writes this value only when the DESKTOPSHORTCUT property was set,
+    // so "the value exists" means the shortcut was chosen.
     use winreg::RegKey;
     use winreg::enums::{HKEY_LOCAL_MACHINE, KEY_READ};
     RegKey::predef(HKEY_LOCAL_MACHINE)
@@ -120,6 +131,22 @@ mod tests {
                 "DESKTOPSHORTCUT="
             ]
         );
+    }
+
+    #[test]
+    fn ps_quote_doubles_typographic_quotes() {
+        assert_eq!(ps_quote("O\u{2019}Brien"), "'O\u{2019}\u{2019}Brien'");
+        assert_eq!(
+            ps_quote("a\u{2018}\u{201A}\u{201B}b'"),
+            "'a\u{2018}\u{2018}\u{201A}\u{201A}\u{201B}\u{201B}b'''",
+        );
+        let s = helper_script(
+            1,
+            Path::new("C:\\U\\O\u{2019}B\\a.msi"),
+            Path::new("C:\\U\\O\u{2019}B\\f.exe"),
+            false,
+        );
+        assert!(s.contains("'C:\\U\\O\u{2019}\u{2019}B\\f.exe'"), "{s}");
     }
 
     #[test]

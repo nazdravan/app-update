@@ -149,13 +149,8 @@ fn sh_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
-/// The whole install as one shell script, to run as root. `owner` (`uid:gid`)
-/// gets the new files so later updates need no password.
-pub fn admin_script(dmg: &Path, bundle: &Path, bundle_name: &str, owner: Option<&str>) -> String {
-    let chown = owner
-        .filter(|o| o.chars().all(|c| c.is_ascii_digit() || c == ':'))
-        .map(|o| format!("/usr/sbin/chown -R {o} \"$NEW\"\n"))
-        .unwrap_or_default();
+/// The whole install as one shell script, to run as root.
+pub fn admin_script(dmg: &Path, bundle: &Path, bundle_name: &str) -> String {
     format!(
         "set -e\n\
          DMG={dmg}\n\
@@ -167,7 +162,6 @@ pub fn admin_script(dmg: &Path, bundle: &Path, bundle_name: &str, owner: Option<
          /usr/bin/hdiutil attach -nobrowse -readonly -noautoopen -mountpoint \"$MNT\" \"$DMG\" >/dev/null\n\
          rm -rf \"$NEW\"\n\
          /usr/bin/ditto \"$MNT\"/{name} \"$NEW\"\n\
-         {chown}\
          /usr/bin/hdiutil detach \"$MNT\" >/dev/null\n\
          rm -rf \"$OLD\"\n\
          if [ -e \"$BUNDLE\" ]; then mv \"$BUNDLE\" \"$OLD\"; fi\n\
@@ -192,18 +186,8 @@ pub fn osascript_source(script: &str) -> String {
     format!("do shell script \"{escaped}\" with administrator privileges")
 }
 
-fn id_arg(flag: &str) -> Option<String> {
-    let out = Command::new("id").arg(flag).output().ok()?;
-    out.status
-        .success()
-        .then(|| String::from_utf8_lossy(&out.stdout).trim().to_string())
-}
-
 fn install_admin(dmg: &Path, bundle: &Path, bundle_name: &str) -> Result<(), UpdateError> {
-    let owner = id_arg("-u")
-        .zip(id_arg("-g"))
-        .map(|(u, g)| format!("{u}:{g}"));
-    let script = admin_script(dmg, bundle, bundle_name, owner.as_deref());
+    let script = admin_script(dmg, bundle, bundle_name);
     let out = Command::new("osascript")
         .arg("-e")
         .arg(osascript_source(&script))
@@ -230,20 +214,13 @@ mod tests {
     #[test]
     fn macos_admin_script_quotes() {
         let bundle = Path::new("/Applications/Fur'nica.app");
-        let script = admin_script(
-            Path::new("/tmp/x y/f.dmg"),
-            bundle,
-            "Fur'nica.app",
-            Some("501:20"),
-        );
+        let script = admin_script(Path::new("/tmp/x y/f.dmg"), bundle, "Fur'nica.app");
         assert!(
             script.contains("BUNDLE='/Applications/Fur'\\''nica.app'\n"),
             "{script}"
         );
         assert!(script.contains("DMG='/tmp/x y/f.dmg'\n"), "{script}");
         assert!(script.contains("\"$MNT\"/'Fur'\\''nica.app'"), "{script}");
-        assert!(script.contains("chown -R 501:20 \"$NEW\""), "{script}");
-        assert!(!admin_script(Path::new("d"), bundle, "n", Some("1; rm -rf /")).contains("chown"));
 
         let osa = osascript_source(&script);
         assert!(osa.starts_with("do shell script \""));

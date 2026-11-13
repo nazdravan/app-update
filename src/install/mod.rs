@@ -30,9 +30,51 @@ fn unsupported() -> UpdateError {
     UpdateError::Install("unsupported".into())
 }
 
-/// Folder for the files of one update: `<temp>/<name>-update-<version>`.
-pub fn download_dir(app: &AppInfo, version: &str) -> PathBuf {
-    std::env::temp_dir().join(format!("{}-update-{version}", app.name))
+/// Creates a NEW private folder for the files of one update:
+/// `<temp>/<name>-update-<version>-<8 hex>`, mode 0700 on unix. It is created
+/// exclusively (never reuses an existing path), because what is downloaded into it
+/// is later installed with elevated rights.
+pub fn download_dir(app: &AppInfo, version: &semver::Version) -> Result<PathBuf, UpdateError> {
+    use std::sync::atomic::{AtomicU32, Ordering};
+    static COUNTER: AtomicU32 = AtomicU32::new(0);
+    let temp = std::env::temp_dir();
+    let mut last = None;
+    for _ in 0..8 {
+        let nanos = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map_or(0, |d| d.subsec_nanos());
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let mix = nanos
+            .wrapping_mul(2_654_435_761)
+            .wrapping_add(std::process::id().wrapping_mul(40_503))
+            .wrapping_add(n.wrapping_mul(2_246_822_519));
+        let dir = temp.join(format!("{}-update-{version}-{mix:08x}", app.name));
+        match create_private_dir(&dir) {
+            Ok(()) => return Ok(dir),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => last = Some(e),
+            Err(e) => {
+                return Err(UpdateError::Install(format!(
+                    "cannot create {}: {e}",
+                    dir.display()
+                )));
+            }
+        }
+    }
+    Err(UpdateError::Install(format!(
+        "cannot create a download folder: {}",
+        last.map(|e| e.to_string()).unwrap_or_default()
+    )))
+}
+
+#[cfg(unix)]
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new().mode(0o700).create(dir)
+}
+
+#[cfg(not(unix))]
+fn create_private_dir(dir: &Path) -> std::io::Result<()> {
+    std::fs::create_dir(dir)
 }
 
 /// Runs a command that asks for rights (`pkexec`): exit 126 and 127 mean the user
@@ -152,6 +194,10 @@ fn open_bundle(bundle: &Path) -> Result<(), UpdateError> {
 
 fn spawn_detached(exe: &Path) -> Result<(), UpdateError> {
     let mut cmd = std::process::Command::new(exe);
+    // The new copy must not think it still runs inside the old AppImage.
+    for var in ["APPIMAGE", "APPDIR", "ARGV0", "OWD"] {
+        cmd.env_remove(var);
+    }
     if let Some(dir) = exe.parent() {
         cmd.current_dir(dir);
     }
@@ -281,10 +327,54 @@ mod tests {
     }
 
     #[test]
-    fn download_dir_name() {
-        let d = download_dir(&APP, "3.0.6");
-        assert_eq!(d.parent().unwrap(), std::env::temp_dir());
-        assert_eq!(d.file_name().unwrap(), "furnica-update-3.0.6");
+    fn download_dirs_are_new_and_private() {
+        let v = semver::Version::new(3, 0, 6);
+        let a = download_dir(&APP, &v).unwrap();
+        let b = download_dir(&APP, &v).unwrap();
+        assert_ne!(a, b);
+        assert!(a.is_dir() && b.is_dir());
+        assert_eq!(a.parent().unwrap(), std::env::temp_dir());
+        assert!(
+            a.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with("furnica-update-3.0.6-")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&a).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o700);
+        }
+        let _ = std::fs::remove_dir(a);
+        let _ = std::fs::remove_dir(b);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn restart_drops_appimage_env() {
+        use std::os::unix::fs::PermissionsExt;
+        // SAFETY: only this test sets these variables.
+        unsafe {
+            std::env::set_var("APPIMAGE", "/old.AppImage");
+            std::env::set_var("OWD", "/old");
+        }
+        let t = tempfile::tempdir().unwrap();
+        let exe = t.path().join("app.sh");
+        std::fs::write(&exe, "#!/bin/sh\nenv > env.txt\necho done >> env.txt\n").unwrap();
+        std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+        restart(&Prepared::Restart { exe }).unwrap();
+        let out = t.path().join("env.txt");
+        let mut got = String::new();
+        for _ in 0..50 {
+            got = std::fs::read_to_string(&out).unwrap_or_default();
+            if got.contains("done") {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(got.contains("done"));
+        assert!(!got.contains("APPIMAGE=") && !got.contains("OWD="), "{got}");
     }
 
     #[test]
