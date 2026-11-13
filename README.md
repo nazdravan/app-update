@@ -16,7 +16,7 @@ TLS is rustls with bundled roots, so it also builds for Windows 7
 | Running copy | Asset | Install |
 |---|---|---|
 | Windows MSI | `windows-<x64\|x86>.msi` | `msiexec` on the new MSI (UAC), keeps folder and shortcut choice |
-| Windows portable | `windows-<x64\|x86>-portable.zip`, `windows7-x86-portable.zip` for the Win7 build | files replace those in the exe folder, with rollback |
+| Windows portable | `windows-<x64\|x86>-portable.zip` (`windows-x86_64-portable.zip` also accepted), `windows7-x86-portable.zip` for the Win7 build | files replace those in the exe folder, with rollback; only when a `LICENSE*` file sits next to the exe (a lone exe gets a link) |
 | Linux `.deb` | `linux-x86_64.deb` | system install through `pkexec` |
 | Linux AppImage | `linux-x86_64.AppImage` | atomic rename over the old file, `pkexec` if the folder is read-only |
 | macOS `.app` | `macos-universal.dmg` | mount, copy the new bundle over the old one, unmount |
