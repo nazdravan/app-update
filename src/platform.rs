@@ -82,9 +82,12 @@ pub fn classify(app: &AppInfo, p: &Probe) -> InstallKind {
             Some(msi) if comparable(msi) == comparable(dir) => InstallKind::Msi {
                 dir: dir.to_path_buf(),
             },
-            _ => InstallKind::Portable {
+            _ if unpacked_zip(dir) => InstallKind::Portable {
                 dir: dir.to_path_buf(),
             },
+            // A lone exe (e.g. in Downloads): updating it in place would unpack the
+            // whole zip next to it.
+            _ => InstallKind::LinkOnly,
         };
     }
     match p.edition {
@@ -109,6 +112,20 @@ pub fn classify(app: &AppInfo, p: &Probe) -> InstallKind {
         }),
         _ => InstallKind::LinkOnly,
     }
+}
+
+/// Whether `dir` looks like a folder unpacked from the portable zip: every one of
+/// our zips puts a `LICENSE*` file next to the exe.
+fn unpacked_zip(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries.flatten().any(|e| {
+            e.file_type().is_ok_and(|t| t.is_file())
+                && e.file_name()
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .starts_with("license")
+        })
+    })
 }
 
 /// `<X>.app` when `exe` is `<X>.app/Contents/MacOS/<exe>` and the bundle is
@@ -185,21 +202,26 @@ pub fn asset_for<'a>(
     edition: Edition,
     r: &'a Release,
 ) -> Result<&'a Asset, UpdateError> {
-    let suffix = match (kind, edition) {
-        (InstallKind::Msi { .. }, Edition::WinX64) => "windows-x64.msi",
-        (InstallKind::Msi { .. }, Edition::WinX86) => "windows-x86.msi",
-        (InstallKind::Portable { .. }, Edition::WinX64) => "windows-x64-portable.zip",
-        (InstallKind::Portable { .. }, Edition::WinX86) => "windows-x86-portable.zip",
-        (InstallKind::Portable { .. }, Edition::Win7X86) => "windows7-x86-portable.zip",
-        (InstallKind::Deb, Edition::LinuxX64) => "linux-x86_64.deb",
-        (InstallKind::AppImage { .. }, Edition::LinuxX64) => "linux-x86_64.AppImage",
-        (InstallKind::MacApp { .. }, Edition::MacUniversal) => "macos-universal.dmg",
+    let suffixes: &[&str] = match (kind, edition) {
+        (InstallKind::Msi { .. }, Edition::WinX64) => &["windows-x64.msi"],
+        (InstallKind::Msi { .. }, Edition::WinX86) => &["windows-x86.msi"],
+        // Some apps spell the 64-bit edition `x86_64`.
+        (InstallKind::Portable { .. }, Edition::WinX64) => {
+            &["windows-x64-portable.zip", "windows-x86_64-portable.zip"]
+        }
+        (InstallKind::Portable { .. }, Edition::WinX86) => &["windows-x86-portable.zip"],
+        (InstallKind::Portable { .. }, Edition::Win7X86) => &["windows7-x86-portable.zip"],
+        (InstallKind::Deb, Edition::LinuxX64) => &["linux-x86_64.deb"],
+        (InstallKind::AppImage { .. }, Edition::LinuxX64) => &["linux-x86_64.AppImage"],
+        (InstallKind::MacApp { .. }, Edition::MacUniversal) => &["macos-universal.dmg"],
         _ => return Err(UpdateError::NoAsset),
     };
-    let wanted = format!("{}-{}-{suffix}", app.name, r.version);
-    r.assets
+    suffixes
         .iter()
-        .find(|a| a.name == wanted)
+        .find_map(|suffix| {
+            let wanted = format!("{}-{}-{suffix}", app.name, r.version);
+            r.assets.iter().find(|a| a.name == wanted)
+        })
         .ok_or(UpdateError::NoAsset)
 }
 
@@ -244,6 +266,7 @@ mod tests {
         let other = temp_dir("msi-other");
         let exe = dir.join("Furnica.exe");
         std::fs::write(&exe, b"x").unwrap();
+        std::fs::write(dir.join("LICENSE.txt"), b"x").unwrap();
         let shouted = format!("{}\\", dir.to_string_lossy().to_uppercase());
 
         for edition in [Edition::WinX64, Edition::WinX86, Edition::Win7X86] {
@@ -263,6 +286,26 @@ mod tests {
                 InstallKind::Portable { dir: dir.clone() }
             );
         }
+    }
+
+    #[test]
+    fn classify_windows_lone_exe_is_link_only() {
+        let dir = temp_dir("lone");
+        let exe = dir.join("Furnica.exe");
+        std::fs::write(&exe, b"x").unwrap();
+        std::fs::write(dir.join("notes.txt"), b"x").unwrap();
+        std::fs::create_dir_all(dir.join("LICENSE-dir")).unwrap();
+        let p = probe(Edition::WinX64, &exe);
+        assert_eq!(classify(&APP, &p), InstallKind::LinkOnly);
+
+        // An MSI folder needs no marker.
+        let mut p = probe(Edition::WinX64, &exe);
+        p.msi_folder = Some(dir.clone());
+        assert_eq!(classify(&APP, &p), InstallKind::Msi { dir: dir.clone() });
+
+        std::fs::write(dir.join("license-mit"), b"x").unwrap();
+        let p = probe(Edition::WinX64, &exe);
+        assert_eq!(classify(&APP, &p), InstallKind::Portable { dir });
     }
 
     #[test]
@@ -373,6 +416,32 @@ mod tests {
         assert_eq!(
             name(&InstallKind::Deb, Edition::LinuxX64),
             "furnica-3.0.5-linux-x86_64.deb"
+        );
+    }
+
+    #[test]
+    fn x86_64_spelling_of_portable_zip() {
+        let mut r = parse_latest(LATEST).unwrap();
+        r.assets
+            .retain(|a| !a.name.ends_with("windows-x64-portable.zip"));
+        let mut alias = r.assets[0].clone();
+        alias.name = format!("furnica-{}-windows-x86_64-portable.zip", r.version);
+        r.assets.push(alias);
+        let portable = InstallKind::Portable { dir: "/x".into() };
+        assert_eq!(
+            asset_for(&APP, &portable, Edition::WinX64, &r)
+                .unwrap()
+                .name,
+            "furnica-3.0.5-windows-x86_64-portable.zip"
+        );
+        // A bare exe is never picked.
+        r.assets.retain(|a| !a.name.contains("x86_64-portable"));
+        let mut exe = r.assets[0].clone();
+        exe.name = "furnica-3.0.5-windows-x86_64.exe".into();
+        r.assets.push(exe);
+        assert_eq!(
+            asset_for(&APP, &portable, Edition::WinX64, &r),
+            Err(UpdateError::NoAsset)
         );
     }
 
