@@ -14,4 +14,12 @@ sha2 = "0.10"
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [target.'cfg(windows)'.dependencies]
+# Only the Windows binary carries the zip reader; other OSes need it for tests only.
 winreg = "0.55"
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+flate2 = "1"
+
+[dev-dependencies]
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
+flate2 = "1"
+tempfile = "3"
