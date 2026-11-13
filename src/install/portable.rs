@@ -1,6 +1,7 @@
 //! Windows portable install: extract the zip next to the running copy, swap files
 //! with rollback. Works on every OS; `prepare` limits it to Windows.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -10,6 +11,7 @@ use crate::{AppInfo, UpdateError};
 const MAX_FILES: usize = 1000;
 const OLD: &str = ".update-old";
 const NEW: &str = ".update-new";
+const MARKER: &str = "RESTORE-FAILED.txt";
 
 fn io_err(dir: &Path, e: &io::Error) -> UpdateError {
     if e.kind() == io::ErrorKind::PermissionDenied {
@@ -28,6 +30,13 @@ pub fn install(zip: &Path, dir: &Path, exe_name: &str) -> Result<PathBuf, Update
 
     let new = dir.join(NEW);
     let old = dir.join(OLD);
+    if old.join(MARKER).exists() {
+        return Err(UpdateError::Install(format!(
+            "a previous update failed to restore the old files; they are kept in {}, \
+             restore them by hand and delete that folder",
+            old.display()
+        )));
+    }
     let _ = fs::remove_dir_all(&new);
     let _ = fs::remove_dir_all(&old);
 
@@ -42,18 +51,39 @@ pub fn install(zip: &Path, dir: &Path, exe_name: &str) -> Result<PathBuf, Update
     let mut done = Vec::new();
     if let Err(e) = swap(dir, &files, &mut done) {
         let restored = rollback(dir, done);
-        let _ = fs::remove_dir_all(&new);
-        let _ = fs::remove_dir_all(&old);
-        return Err(match (&e, restored) {
-            (e, true) if e.kind() == io::ErrorKind::PermissionDenied => io_err(dir, e),
-            (e, true) => UpdateError::Install(format!("{e}; the previous files were restored")),
-            (e, false) => UpdateError::Install(format!(
-                "{e}; restoring the previous files also failed, reinstall the program"
-            )),
-        });
+        return Err(swap_failure(dir, &e, restored));
     }
     let _ = fs::remove_dir_all(&new);
     Ok(dir.join(exe_name))
+}
+
+/// Builds the error for a failed swap. When the rollback worked, the work folders are
+/// deleted; when it did not, `.update-old` is the only copy of the old files, so it is
+/// kept together with a marker that stops install and cleanup from touching it.
+fn swap_failure(dir: &Path, e: &io::Error, restored: bool) -> UpdateError {
+    let old = dir.join(OLD);
+    if restored {
+        let _ = fs::remove_dir_all(dir.join(NEW));
+        let _ = fs::remove_dir_all(&old);
+        return if e.kind() == io::ErrorKind::PermissionDenied {
+            io_err(dir, e)
+        } else {
+            UpdateError::Install(format!("{e}; the previous files were restored"))
+        };
+    }
+    let _ = fs::create_dir_all(&old);
+    let _ = fs::write(
+        old.join(MARKER),
+        format!(
+            "An update failed and the old files could not all be put back.\r\n\
+             Copy the files from this folder back into {} and delete this folder.\r\n",
+            dir.display()
+        ),
+    );
+    UpdateError::Install(format!(
+        "{e}; restoring the previous files also failed. The old files are kept in {}",
+        old.display()
+    ))
 }
 
 /// Extracts `zip` into `new`, dropping the top folder. Returns the relative file paths.
@@ -67,6 +97,7 @@ fn extract(zip: &Path, new: &Path, exe_name: &str) -> Result<Vec<PathBuf>, Updat
     }
     fs::create_dir_all(new).map_err(|e| io_err(new, &e))?;
     let mut files = Vec::new();
+    let mut seen = HashSet::new();
     for i in 0..archive.len() {
         let mut entry = archive
             .by_index(i)
@@ -102,6 +133,9 @@ fn extract(zip: &Path, new: &Path, exe_name: &str) -> Result<Vec<PathBuf>, Updat
         if entry.is_dir() {
             fs::create_dir_all(&target).map_err(|e| io_err(new, &e))?;
             continue;
+        }
+        if !seen.insert(rel.to_string_lossy().to_lowercase()) {
+            return Err(bad(format!("duplicate file in the update: {name}")));
         }
         if files.len() >= MAX_FILES {
             return Err(bad("the update has too many files".into()));
@@ -142,7 +176,6 @@ fn swap(dir: &Path, files: &[PathBuf], done: &mut Vec<Step>) -> io::Result<()> {
             if let Some(parent) = saved.parent() {
                 fs::create_dir_all(parent)?;
             }
-            let _ = fs::remove_file(&saved);
             fs::rename(&target, &saved)?;
             done.push(Step::MovedOld(p.clone()));
         }
@@ -188,8 +221,11 @@ fn rollback(dir: &Path, done: Vec<Step>) -> bool {
 
 /// Removes `.update-old`/`.update-new` in `dir` and `<name>-*.part` files in `temp`.
 pub fn cleanup(app: &AppInfo, dir: &Path, temp: &Path) {
-    let _ = fs::remove_dir_all(dir.join(OLD));
-    let _ = fs::remove_dir_all(dir.join(NEW));
+    // After a failed restore `.update-old` holds the only copy of the old files.
+    if !dir.join(OLD).join(MARKER).exists() {
+        let _ = fs::remove_dir_all(dir.join(OLD));
+        let _ = fs::remove_dir_all(dir.join(NEW));
+    }
     let prefix = format!("{}-", app.name);
     let Ok(entries) = fs::read_dir(temp) else {
         return;
@@ -220,6 +256,19 @@ mod tests {
             z.write_all(body.as_bytes()).unwrap();
         }
         z.finish().unwrap();
+    }
+
+    fn test_app() -> AppInfo {
+        AppInfo {
+            name: "furnica",
+            display_name: "Furnica",
+            repo: "nazdravan/furnica",
+            version: "3.0.5",
+            windows_exe: "Furnica.exe",
+            msi_registry_key: "",
+            deb_package: "furnica",
+            mac_bundle: "Furnica.app",
+        }
     }
 
     fn read(p: impl AsRef<Path>) -> String {
@@ -359,16 +408,7 @@ mod tests {
         fs::write(tmp.join("furnica-1.0.0.part"), "x").unwrap();
         fs::write(tmp.join("furnica-x.msi"), "x").unwrap();
         fs::write(tmp.join("other-1.part"), "x").unwrap();
-        let app = AppInfo {
-            name: "furnica",
-            display_name: "Furnica",
-            repo: "nazdravan/furnica",
-            version: "3.0.5",
-            windows_exe: "Furnica.exe",
-            msi_registry_key: "",
-            deb_package: "furnica",
-            mac_bundle: "Furnica.app",
-        };
+        let app = test_app();
         cleanup(&app, &dir, &tmp);
         assert!(!dir.join(".update-old").exists());
         assert!(!dir.join(".update-new").exists());
@@ -376,5 +416,74 @@ mod tests {
         assert!(!tmp.join("furnica-1.0.0.part").exists());
         assert!(tmp.join("furnica-x.msi").exists());
         assert!(tmp.join("other-1.part").exists());
+    }
+
+    #[test]
+    fn failed_restore_keeps_old_copy() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = old_folder(t.path());
+        fs::create_dir_all(dir.join(".update-old")).unwrap();
+        fs::write(dir.join(".update-old/Furnica.exe"), "old exe").unwrap();
+        fs::create_dir_all(dir.join(".update-new")).unwrap();
+        let e = io::Error::other("boom");
+        let err = swap_failure(&dir, &e, false);
+        let UpdateError::Install(msg) = err else {
+            panic!("expected Install");
+        };
+        assert!(msg.contains(".update-old"), "{msg}");
+        assert_eq!(read(dir.join(".update-old/Furnica.exe")), "old exe");
+        assert!(dir.join(".update-old/RESTORE-FAILED.txt").exists());
+        assert!(dir.join(".update-new").exists());
+
+        let app = test_app();
+        cleanup(&app, &dir, t.path());
+        assert_eq!(read(dir.join(".update-old/Furnica.exe")), "old exe");
+        assert!(dir.join(".update-new").exists());
+
+        let zip = t.path().join("new.zip");
+        make_zip(&zip, &[(&format!("{TOP}/Furnica.exe"), "new exe")]);
+        let before = snapshot(&dir);
+        assert!(matches!(
+            install(&zip, &dir, "Furnica.exe"),
+            Err(UpdateError::Install(m)) if m.contains(".update-old")
+        ));
+        assert_eq!(snapshot(&dir), before);
+        assert_eq!(read(dir.join("Furnica.exe")), "old exe");
+    }
+
+    #[test]
+    fn duplicate_entries_rejected() {
+        let t = tempfile::tempdir().unwrap();
+        let dir = old_folder(t.path());
+        let before = snapshot(&dir);
+        let exe = format!("{TOP}/Furnica.exe");
+        // Exact duplicates cannot even be written by the zip crate (and its reader
+        // rejects them); case-only duplicates are the case our own check must catch.
+        let cases: [[(String, &str); 3]; 1] = [[
+            (exe.clone(), "n"),
+            (format!("{TOP}/Exemple/a.ant"), "1"),
+            (format!("{TOP}/exemple/A.ant"), "2"),
+        ]];
+        for (i, entries) in cases.iter().enumerate() {
+            let zip = t.path().join(format!("dup{i}.zip"));
+            let f = fs::File::create(&zip).unwrap();
+            let mut z = zip::ZipWriter::new(f);
+            for (name, body) in entries {
+                z.start_file(name.as_str(), SimpleFileOptions::default())
+                    .unwrap();
+                z.write_all(body.as_bytes()).unwrap();
+            }
+            z.finish().unwrap();
+            assert!(
+                matches!(
+                    install(&zip, &dir, "Furnica.exe"),
+                    Err(UpdateError::Install(_))
+                ),
+                "case {i}"
+            );
+            assert_eq!(snapshot(&dir), before, "case {i}");
+            assert!(!dir.join(".update-new").exists());
+            assert!(!dir.join(".update-old").exists());
+        }
     }
 }
