@@ -55,7 +55,10 @@ pub struct Probe {
     pub edition: Edition,
     pub exe: PathBuf,
     pub msi_folder: Option<PathBuf>,
+    /// `$APPIMAGE`, as inherited from the environment (may belong to a parent process).
     pub appimage: Option<PathBuf>,
+    /// `$APPDIR`, the AppImage mount point (inherited the same way).
+    pub appdir: Option<PathBuf>,
     pub deb_installed: bool,
 }
 
@@ -86,7 +89,14 @@ pub fn classify(app: &AppInfo, p: &Probe) -> InstallKind {
     }
     match p.edition {
         Edition::LinuxX64 => {
-            if let Some(path) = &p.appimage {
+            // The AppImage runtime exports APPIMAGE/APPDIR to its children, so a
+            // different program started from an AppImage inherits them. Trust them
+            // only when this very executable lives inside APPDIR.
+            let own_appimage = match (&p.appimage, &p.appdir) {
+                (Some(path), Some(dir)) if p.exe.starts_with(dir) => Some(path),
+                _ => None,
+            };
+            if let Some(path) = own_appimage {
                 InstallKind::AppImage { path: path.clone() }
             } else if p.deb_installed && p.exe == Path::new("/usr/bin").join(app.deb_package) {
                 InstallKind::Deb
@@ -131,6 +141,9 @@ pub fn detect(app: &AppInfo) -> InstallKind {
         exe,
         msi_folder: msi_folder(app),
         appimage: std::env::var_os("APPIMAGE")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from),
+        appdir: std::env::var_os("APPDIR")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from),
         deb_installed: edition == Edition::LinuxX64 && deb_installed(app),
@@ -214,6 +227,7 @@ mod tests {
             exe: exe.into(),
             msi_folder: None,
             appimage: None,
+            appdir: None,
             deb_installed: false,
         }
     }
@@ -253,14 +267,31 @@ mod tests {
 
     #[test]
     fn classify_linux() {
-        let mut p = probe(Edition::LinuxX64, "/usr/bin/furnica");
+        let mut p = probe(Edition::LinuxX64, "/tmp/.mount_Furnic/usr/bin/furnica");
         p.appimage = Some("/home/x/Furnica.AppImage".into());
+        p.appdir = Some("/tmp/.mount_Furnic".into());
         assert_eq!(
             classify(&APP, &p),
             InstallKind::AppImage {
                 path: "/home/x/Furnica.AppImage".into()
             }
         );
+
+        // APPIMAGE/APPDIR inherited from another AppImage that launched us:
+        // our exe is outside APPDIR, so it falls through to Deb / LinkOnly.
+        let mut p = probe(Edition::LinuxX64, "/usr/bin/furnica");
+        p.appimage = Some("/home/x/Other.AppImage".into());
+        p.appdir = Some("/tmp/.mount_Other".into());
+        p.deb_installed = true;
+        assert_eq!(classify(&APP, &p), InstallKind::Deb);
+        let mut p = probe(Edition::LinuxX64, "/opt/furnica/furnica");
+        p.appimage = Some("/home/x/Other.AppImage".into());
+        p.appdir = Some("/tmp/.mount_Other".into());
+        assert_eq!(classify(&APP, &p), InstallKind::LinkOnly);
+        // APPIMAGE without APPDIR is not trusted either.
+        let mut p = probe(Edition::LinuxX64, "/opt/furnica/furnica");
+        p.appimage = Some("/home/x/Other.AppImage".into());
+        assert_eq!(classify(&APP, &p), InstallKind::LinkOnly);
 
         let mut p = probe(Edition::LinuxX64, "/usr/bin/furnica");
         p.deb_installed = true;

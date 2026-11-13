@@ -72,13 +72,18 @@ impl Updater {
         lock(&self.inner).state = s;
     }
 
-    /// Starts a check on a thread. Ignored while a check or a download is running.
+    /// Starts a check on a thread. Ignored while a check, a download or an install is
+    /// running, and in `Ready` (the prepared update stays; the window shows it again).
     pub fn check(&mut self, ctx: &egui::Context) {
         let generation = {
             let mut g = lock(&self.inner);
+            // In `Ready` an update is already prepared: show it again, don't drop it.
             if matches!(
                 g.state,
-                State::Checking | State::Downloading { .. } | State::Installing
+                State::Checking
+                    | State::Downloading { .. }
+                    | State::Installing
+                    | State::Ready { .. }
             ) {
                 return;
             }
@@ -119,7 +124,13 @@ impl Updater {
                 &mut |done, total| {
                     set_state(&inner, &ctx, generation, State::Downloading { done, total });
                 },
-                &mut || set_state(&inner, &ctx, generation, State::Installing),
+                &mut || {
+                    let entered = enter_installing(&inner, generation, &cancel);
+                    if entered {
+                        ctx.request_repaint();
+                    }
+                    entered
+                },
             );
             match result {
                 Ok(p) => {
@@ -160,6 +171,7 @@ impl Updater {
         let mut event = None;
         let mut next: Option<State> = None;
         let mut start: Option<Release> = None;
+        let mut cancel_clicked = false;
         egui::Window::new(t.title)
             .collapsible(false)
             .resizable(false)
@@ -218,7 +230,7 @@ impl Updater {
                     ui.label(t.downloading);
                     if ui.button(t.cancel).clicked() {
                         self.cancel.store(true, Ordering::Relaxed);
-                        next = Some(State::Idle);
+                        cancel_clicked = true;
                     }
                 }
                 State::Installing => {
@@ -228,7 +240,16 @@ impl Updater {
                     });
                 }
                 State::Ready { version } => {
-                    ui.label(t.ready.replace("{v}", version));
+                    let on_restart = matches!(
+                        lock(&self.inner).prepared,
+                        Some(Prepared::MsiAfterExit { .. })
+                    );
+                    let text = if on_restart {
+                        t.ready_on_restart
+                    } else {
+                        t.ready
+                    };
+                    ui.label(text.replace("{v}", version));
                     ui.horizontal(|ui| {
                         if ui.button(t.restart).clicked() {
                             event = Some(UpdaterEvent::RestartRequested);
@@ -247,7 +268,15 @@ impl Updater {
                     }
                 }
             });
-        if let Some(r) = start {
+        if cancel_clicked {
+            // Back to Idle only if still downloading: once `Installing` was entered
+            // the cancel came too late and the run finishes (or fails) by itself.
+            let mut g = lock(&self.inner);
+            if matches!(g.state, State::Downloading { .. }) {
+                g.generation += 1;
+                g.state = State::Idle;
+            }
+        } else if let Some(r) = start {
             self.start_install(ctx, r);
         } else if let Some(s) = next {
             let mut g = lock(&self.inner);
@@ -297,7 +326,7 @@ fn install_thread(
     release: &Release,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(u64, Option<u64>),
-    installing: &mut dyn FnMut(),
+    installing: &mut dyn FnMut() -> bool,
 ) -> Result<Prepared, UpdateError> {
     let kind = platform::detect(app);
     let asset = platform::asset_for(app, &kind, Edition::current(), release)?;
@@ -305,8 +334,31 @@ fn install_thread(
     let sum = expected_sum(&client, release, &asset.name)?;
     let file = install::download_dir(app, &release.version)?.join(&asset.name);
     client.download(&asset.url, &file, &sum, progress, cancel)?;
-    installing();
-    install::prepare(app, &kind, &file)
+    after_download(installing, || install::prepare(app, &kind, &file))
+}
+
+/// Moves to `Installing` and only then runs `prepare`. If the run was abandoned or
+/// cancelled while the download finished, `prepare` is never reached: it may show
+/// a password prompt or replace the program.
+fn after_download<T>(
+    installing: &mut dyn FnMut() -> bool,
+    prepare: impl FnOnce() -> Result<T, UpdateError>,
+) -> Result<T, UpdateError> {
+    if !installing() {
+        return Err(UpdateError::Cancelled);
+    }
+    prepare()
+}
+
+/// Sets `Installing` if this run is still current and was not cancelled. The check
+/// and the write happen under one lock, so a Cancel pressed earlier always wins.
+fn enter_installing(inner: &Mutex<Inner>, generation: u64, cancel: &AtomicBool) -> bool {
+    let mut g = lock(inner);
+    if g.generation != generation || cancel.load(Ordering::Relaxed) {
+        return false;
+    }
+    g.state = State::Installing;
+    true
 }
 
 #[cfg(test)]
@@ -376,6 +428,97 @@ mod tests {
         assert_eq!(h.state().1, Some(UpdaterEvent::RestartRequested));
     }
 
+    fn msi_prepared() -> Prepared {
+        Prepared::MsiAfterExit {
+            msi: "a.msi".into(),
+            exe: "f.exe".into(),
+            desktop_shortcut: true,
+        }
+    }
+
+    #[test]
+    fn ready_text_depends_on_prepared() {
+        let mut h = harness(State::Ready {
+            version: "3.0.6".into(),
+        });
+        h.get_by_label("Versiunea 3.0.6 e instalată. Repornește programul ca s-o folosești.");
+        h.state_mut().0.inner.lock().unwrap().prepared = Some(msi_prepared());
+        h.run();
+        h.get_by_label("Versiunea 3.0.6 se instalează la repornire.");
+    }
+
+    #[test]
+    fn check_in_ready_keeps_prepared() {
+        let mut u = Updater::new(APP);
+        u.set_state_for_test(State::Ready {
+            version: "3.0.6".into(),
+        });
+        lock(&u.inner).prepared = Some(msi_prepared());
+        u.check(&egui::Context::default());
+        let g = lock(&u.inner);
+        assert_eq!(
+            g.state,
+            State::Ready {
+                version: "3.0.6".into()
+            }
+        );
+        assert_eq!(g.prepared, Some(msi_prepared()));
+        assert_eq!(g.generation, 0);
+        drop(g);
+        assert!(!u.is_busy());
+    }
+
+    fn downloading() -> Updater {
+        let u = Updater::new(APP);
+        {
+            let mut g = lock(&u.inner);
+            g.generation = 5;
+            g.state = State::Downloading {
+                done: 1,
+                total: None,
+            };
+        }
+        u
+    }
+
+    #[test]
+    fn enter_installing_guard() {
+        let u = downloading();
+        let no = AtomicBool::new(false);
+        // Stale generation: refused, state untouched.
+        assert!(!enter_installing(&u.inner, 4, &no));
+        assert!(matches!(lock(&u.inner).state, State::Downloading { .. }));
+        // Cancel set: refused, state untouched.
+        assert!(!enter_installing(&u.inner, 5, &AtomicBool::new(true)));
+        assert!(matches!(lock(&u.inner).state, State::Downloading { .. }));
+        // Current and not cancelled.
+        assert!(enter_installing(&u.inner, 5, &no));
+        assert_eq!(lock(&u.inner).state, State::Installing);
+    }
+
+    #[test]
+    fn cancelled_after_download_never_prepares() {
+        let u = downloading();
+        let mut prepared = false;
+        let cancel = AtomicBool::new(true);
+        let r = after_download(&mut || enter_installing(&u.inner, 5, &cancel), || {
+            prepared = true;
+            Ok(())
+        });
+        assert_eq!(r, Err(UpdateError::Cancelled));
+        assert!(!prepared);
+        // Not cancelled: prepare runs.
+        let r = after_download(
+            &mut || enter_installing(&u.inner, 5, &AtomicBool::new(false)),
+            || {
+                prepared = true;
+                Ok(())
+            },
+        );
+        assert_eq!(r, Ok(()));
+        assert!(prepared);
+    }
+
     #[test]
     fn restart_outside_ready_is_error() {
         let mut u = Updater::new(APP);
@@ -399,6 +542,7 @@ mod tests {
                 t.downloading,
                 t.installing,
                 t.ready,
+                t.ready_on_restart,
                 t.restart,
                 t.cancel,
                 t.close,

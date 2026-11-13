@@ -8,7 +8,7 @@ use crate::{AppInfo, UpdateError};
 /// Returns `None` unless the arguments contain `--check-update`; otherwise prints
 /// the result and returns the exit code (0 on success, 1 on error).
 pub fn run_cli(app: &AppInfo) -> Option<i32> {
-    if !std::env::args().any(|a| a == "--check-update") {
+    if !std::env::args_os().any(|a| a == "--check-update") {
         return None;
     }
     attach_console();
