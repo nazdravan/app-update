@@ -277,7 +277,7 @@ fn resolve(base: &str, location: &str) -> String {
         let dir_end = base[..base.find(['?', '#']).unwrap_or(base.len())]
             .rfind('/')
             .filter(|&i| i >= origin_end)
-            .map_or(origin_end, |i| i);
+            .unwrap_or(origin_end);
         format!("{}/{}", &base[..dir_end], location)
     }
 }

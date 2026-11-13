@@ -50,6 +50,11 @@ jobs:
             tar --zstd -xf "$MSVCRT/$p" -C "$MSVCRT" mingw32/lib
           done
       - name: Build
+        env:
+          # Furnica sets the linker in .cargo/config.toml; here it comes from the environment.
+          CARGO_TARGET_I686_WIN7_WINDOWS_GNU_LINKER: i686-w64-mingw32-gcc
+          CC_i686_win7_windows_gnu: i686-w64-mingw32-gcc
+          AR_i686_win7_windows_gnu: i686-w64-mingw32-ar
         run: |
           LIB=$PWD/.cache/msys32/mingw32/lib
           GCC_LIB=$(echo "$LIB"/gcc/i686-w64-mingw32/*)
