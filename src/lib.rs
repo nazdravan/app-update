@@ -3,11 +3,21 @@
 use std::fmt;
 use std::path::PathBuf;
 
+pub mod cli;
+pub mod http;
+pub mod install;
+pub mod platform;
 pub mod release;
 pub mod sums;
+pub mod texts;
+pub mod updater;
 pub mod version;
 
+pub use cli::run_cli;
+pub use install::cleanup;
 pub use release::{Asset, Release};
+pub use texts::{Lang, Texts, texts};
+pub use updater::{State, Updater, UpdaterEvent};
 
 /// Static description of the application that wants to update itself.
 #[derive(Debug, Clone, Copy)]
