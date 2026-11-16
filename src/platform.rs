@@ -44,6 +44,7 @@ pub enum InstallKind {
     Msi { dir: PathBuf },
     Portable { dir: PathBuf },
     Deb,
+    Rpm,
     AppImage { path: PathBuf },
     MacApp { bundle: PathBuf },
     LinkOnly,
@@ -60,6 +61,7 @@ pub struct Probe {
     /// `$APPDIR`, the AppImage mount point (inherited the same way).
     pub appdir: Option<PathBuf>,
     pub deb_installed: bool,
+    pub rpm_installed: bool,
 }
 
 /// A path in a form fit for comparison: canonical when it exists, without a
@@ -101,8 +103,12 @@ pub fn classify(app: &AppInfo, p: &Probe) -> InstallKind {
             };
             if let Some(path) = own_appimage {
                 InstallKind::AppImage { path: path.clone() }
-            } else if p.deb_installed && p.exe == Path::new("/usr/bin").join(app.deb_package) {
+            } else if p.exe != Path::new("/usr/bin").join(app.deb_package) {
+                InstallKind::LinkOnly
+            } else if p.deb_installed {
                 InstallKind::Deb
+            } else if p.rpm_installed {
+                InstallKind::Rpm
             } else {
                 InstallKind::LinkOnly
             }
@@ -164,6 +170,7 @@ pub fn detect(app: &AppInfo) -> InstallKind {
             .filter(|v| !v.is_empty())
             .map(PathBuf::from),
         deb_installed: edition == Edition::LinuxX64 && deb_installed(app),
+        rpm_installed: edition == Edition::LinuxX64 && rpm_installed(app),
     };
     classify(app, &probe)
 }
@@ -192,6 +199,13 @@ fn deb_installed(app: &AppInfo) -> bool {
         .is_ok_and(|o| o.status.success() && o.stdout == b"install ok installed")
 }
 
+fn rpm_installed(app: &AppInfo) -> bool {
+    std::process::Command::new("rpm")
+        .args(["-q", "--qf", "%{NAME}", app.deb_package])
+        .output()
+        .is_ok_and(|o| o.status.success() && o.stdout == app.deb_package.as_bytes())
+}
+
 /// The release asset that updates a copy of this kind and edition.
 ///
 /// `NoAsset` when the release lacks it, or when the copy cannot be updated in
@@ -212,6 +226,7 @@ pub fn asset_for<'a>(
         (InstallKind::Portable { .. }, Edition::WinX86) => &["windows-x86-portable.zip"],
         (InstallKind::Portable { .. }, Edition::Win7X86) => &["windows7-x86-portable.zip"],
         (InstallKind::Deb, Edition::LinuxX64) => &["linux-x86_64.deb"],
+        (InstallKind::Rpm, Edition::LinuxX64) => &["linux-x86_64.rpm"],
         (InstallKind::AppImage { .. }, Edition::LinuxX64) => &["linux-x86_64.AppImage"],
         (InstallKind::MacApp { .. }, Edition::MacUniversal) => &["macos-universal.dmg"],
         _ => return Err(UpdateError::NoAsset),
@@ -251,6 +266,7 @@ mod tests {
             appimage: None,
             appdir: None,
             deb_installed: false,
+            rpm_installed: false,
         }
     }
 
@@ -347,6 +363,17 @@ mod tests {
         let mut p = probe(Edition::LinuxX64, "/home/x/furnica");
         p.deb_installed = true;
         assert_eq!(classify(&APP, &p), InstallKind::LinkOnly);
+
+        let mut p = probe(Edition::LinuxX64, "/usr/bin/furnica");
+        p.rpm_installed = true;
+        assert_eq!(classify(&APP, &p), InstallKind::Rpm);
+        // dpkg wins when both databases list the package (rpm on a Debian box).
+        p.deb_installed = true;
+        assert_eq!(classify(&APP, &p), InstallKind::Deb);
+
+        let mut p = probe(Edition::LinuxX64, "/opt/furnica/furnica");
+        p.rpm_installed = true;
+        assert_eq!(classify(&APP, &p), InstallKind::LinkOnly);
     }
 
     #[test]
@@ -416,6 +443,19 @@ mod tests {
         assert_eq!(
             name(&InstallKind::Deb, Edition::LinuxX64),
             "furnica-3.0.5-linux-x86_64.deb"
+        );
+        assert_eq!(
+            name(&InstallKind::Rpm, Edition::LinuxX64),
+            "furnica-3.0.5-linux-x86_64.rpm"
+        );
+        assert!(
+            asset_for(
+                &APP,
+                &InstallKind::Rpm,
+                Edition::WinX64,
+                &parse_latest(LATEST).unwrap()
+            )
+            .is_err()
         );
     }
 

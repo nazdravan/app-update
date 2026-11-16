@@ -12,6 +12,7 @@ pub mod macos;
 pub mod msi;
 #[cfg(any(windows, test))]
 pub mod portable;
+pub mod rpm;
 
 /// What remains to do once the new copy is in place.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -102,6 +103,9 @@ pub fn prepare(app: &AppInfo, kind: &InstallKind, file: &Path) -> Result<Prepare
         InstallKind::Msi { dir } => prepare_msi(app, dir, file),
         InstallKind::Deb => {
             deb::install(file, app.deb_package).map(|exe| Prepared::Restart { exe })
+        }
+        InstallKind::Rpm => {
+            rpm::install(file, app.deb_package).map(|exe| Prepared::Restart { exe })
         }
         InstallKind::AppImage { path } => {
             appimage::install(file, path).map(|exe| Prepared::Restart { exe })
