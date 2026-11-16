@@ -11,6 +11,11 @@
       "size": 5147012
     },
     {
+      "browser_download_url": "https://github.com/nazdravan/furnica/releases/download/v3.0.5/furnica-3.0.5-linux-x86_64.rpm",
+      "name": "furnica-3.0.5-linux-x86_64.rpm",
+      "size": 5302188
+    },
+    {
       "browser_download_url": "https://github.com/nazdravan/furnica/releases/download/v3.0.5/furnica-3.0.5-linux-x86_64.tar.gz",
       "name": "furnica-3.0.5-linux-x86_64.tar.gz",
       "size": 7138933

@@ -34,7 +34,8 @@ pub struct AppInfo {
     pub windows_exe: &'static str,
     /// Registry key written by the MSI (`Software\owner\App`).
     pub msi_registry_key: &'static str,
-    /// Debian package name.
+    /// Linux package name, the same for the `.deb` and the `.rpm`
+    /// (the program is `/usr/bin/<name>`).
     pub deb_package: &'static str,
     /// macOS bundle name (`Furnica.app`).
     pub mac_bundle: &'static str,

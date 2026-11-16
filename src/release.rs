@@ -85,7 +85,7 @@ mod tests {
         let r = parse_latest(LATEST).unwrap();
         assert_eq!(r.version, semver::Version::new(3, 0, 5));
         assert_eq!(r.tag, "v3.0.5");
-        assert_eq!(r.assets.len(), 10);
+        assert_eq!(r.assets.len(), 11);
         assert_eq!(
             r.page,
             "https://github.com/nazdravan/furnica/releases/tag/v3.0.5"

@@ -18,6 +18,7 @@ TLS is rustls with bundled roots, so it also builds for Windows 7
 | Windows MSI | `windows-<x64\|x86>.msi` | `msiexec` on the new MSI (UAC), keeps folder and shortcut choice |
 | Windows portable | `windows-<x64\|x86>-portable.zip` (`windows-x86_64-portable.zip` also accepted), `windows7-x86-portable.zip` for the Win7 build | files replace those in the exe folder, with rollback; only when a `LICENSE*` file sits next to the exe (a lone exe gets a link) |
 | Linux `.deb` | `linux-x86_64.deb` | system install through `pkexec` |
+| Linux `.rpm` | `linux-x86_64.rpm` | `pkexec` with `dnf`, else `zypper`, else `rpm -U` |
 | Linux AppImage | `linux-x86_64.AppImage` | atomic rename over the old file, `pkexec` if the folder is read-only |
 | macOS `.app` | `macos-universal.dmg` | mount, copy the new bundle over the old one, unmount |
 | `.tar.gz`, unknown, translocated macOS | none | message with a link to the release page |
@@ -39,7 +40,7 @@ const APP: app_update::AppInfo = app_update::AppInfo {
     version: env!("CARGO_PKG_VERSION"),
     windows_exe: "Furnica.exe",
     msi_registry_key: r"Software\nazdravan\Furnica",
-    deb_package: "furnica",
+    deb_package: "furnica", // also the rpm package name
     mac_bundle: "Furnica.app",
 };
 
@@ -82,6 +83,7 @@ furnica-3.0.5-windows-x64-portable.zip
 furnica-3.0.5-windows-x86-portable.zip
 furnica-3.0.5-windows7-x86-portable.zip
 furnica-3.0.5-linux-x86_64.deb
+furnica-3.0.5-linux-x86_64.rpm
 furnica-3.0.5-linux-x86_64.AppImage
 furnica-3.0.5-linux-x86_64.tar.gz
 furnica-3.0.5-macos-universal.dmg
